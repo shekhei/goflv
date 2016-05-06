@@ -8,15 +8,21 @@ import (
 )
 
 type File struct {
-	file              *os.File
+    file            *os.File
 	name              string
 	readOnly          bool
 	size              int64
 	headerBuf         []byte
-	duration          float64
-	lastTimestamp     uint32
+}
+
+type FlvReader struct {
+}
+
+type FlvWriter struct {
 	firstTimestampSet bool
 	firstTimestamp    uint32
+	lastTimestamp     uint32
+	duration          float64
 }
 
 type TagHeader struct {
@@ -44,7 +50,7 @@ func CreateFile(name string) (flvFile *File, err error) {
 	}
 
 	flvFile = &File{
-		file:      file,
+        file: file,
 		name:      name,
 		readOnly:  false,
 		headerBuf: make([]byte, 11),
@@ -99,21 +105,21 @@ func OpenFile(name string) (flvFile *File, err error) {
 }
 
 func (flvFile *File) Close() {
-	flvFile.file.Close()
+	flvFile.stream.Close()
 }
 
 // Data with audio header
-func (flvFile *File) WriteAudioTag(data []byte, timestamp uint32) (err error) {
+func (flvFile *FlvWriter) WriteAudioTag(data []byte, timestamp uint32) (err error) {
 	return flvFile.WriteTag(data, AUDIO_TAG, timestamp)
 }
 
 // Data with video header
-func (flvFile *File) WriteVideoTag(data []byte, timestamp uint32) (err error) {
+func (flvFile *FlvWriter) WriteVideoTag(data []byte, timestamp uint32) (err error) {
 	return flvFile.WriteTag(data, VIDEO_TAG, timestamp)
 }
 
 // Write tag
-func (flvFile *File) WriteTag(data []byte, tagType byte, timestamp uint32) (err error) {
+func (flvFile *FlvWriter) WriteTag(data []byte, tagType byte, timestamp uint32) (err error) {
 	if timestamp < flvFile.lastTimestamp {
 		timestamp = flvFile.lastTimestamp
 	} else {
@@ -133,48 +139,48 @@ func (flvFile *File) WriteTag(data []byte, tagType byte, timestamp uint32) (err 
 	binary.BigEndian.PutUint32(flvFile.headerBuf[:4], uint32(len(data)))
 	flvFile.headerBuf[0] = tagType
 	// Write data
-	if _, err = flvFile.file.Write(flvFile.headerBuf); err != nil {
+	if _, err = flvFile.stream.Write(flvFile.headerBuf); err != nil {
 		return
 	}
 
 	//tmpBuf := make([]byte, 4)
 	//// Write tag header
-	//if _, err = flvFile.file.Write([]byte{tagType}); err != nil {
+	//if _, err = flvFile.stream.Write([]byte{tagType}); err != nil {
 	//	return
 	//}
 
 	//// Write tag size
 	//binary.BigEndian.PutUint32(tmpBuf, uint32(len(data)))
-	//if _, err = flvFile.file.Write(tmpBuf[1:]); err != nil {
+	//if _, err = flvFile.stream.Write(tmpBuf[1:]); err != nil {
 	//	return
 	//}
 
 	//// Write timestamp
 	//binary.BigEndian.PutUint32(tmpBuf, timestamp)
-	//if _, err = flvFile.file.Write(tmpBuf[1:]); err != nil {
+	//if _, err = flvFile.stream.Write(tmpBuf[1:]); err != nil {
 	//	return
 	//}
-	//if _, err = flvFile.file.Write(tmpBuf[:1]); err != nil {
+	//if _, err = flvFile.stream.Write(tmpBuf[:1]); err != nil {
 	//	return
 	//}
 
 	//// Write stream ID
-	//if _, err = flvFile.file.Write([]byte{0, 0, 0}); err != nil {
+	//if _, err = flvFile.stream.Write([]byte{0, 0, 0}); err != nil {
 	//	return
 	//}
 
 	// Write data
-	if _, err = flvFile.file.Write(data); err != nil {
+	if _, err = flvFile.stream.Write(data); err != nil {
 		return
 	}
 
 	// Write previous tag size
-	if err = binary.Write(flvFile.file, binary.BigEndian, uint32(len(data)+11)); err != nil {
+	if err = binary.Write(flvFile.stream, binary.BigEndian, uint32(len(data)+11)); err != nil {
 		return
 	}
 
 	// Sync to disk
-	//if err = flvFile.file.Sync(); err != nil {
+	//if err = flvFile.stream.Sync(); err != nil {
 	//	return
 	//}
 	return
@@ -183,61 +189,60 @@ func (flvFile *File) WriteTag(data []byte, tagType byte, timestamp uint32) (err 
 func (flvFile *File) SetDuration(duration float64) {
 	flvFile.duration = duration
 }
-
+// this should matter only to flvFile and not writer
 func (flvFile *File) Sync() (err error) {
 	// Update duration on MetaData
-	if _, err = flvFile.file.Seek(DURATION_OFFSET, 0); err != nil {
+	if _, err = flvFile.stream.Seek(DURATION_OFFSET, 0); err != nil {
 		return
 	}
-	if err = binary.Write(flvFile.file, binary.BigEndian, flvFile.duration); err != nil {
+	if err = binary.Write(flvFile.stream, binary.BigEndian, flvFile.duration); err != nil {
 		return
 	}
-	if _, err = flvFile.file.Seek(0, 2); err != nil {
+	if _, err = flvFile.stream.Seek(0, 2); err != nil {
 		return
 	}
 
-	err = flvFile.file.Sync()
+	err = flvFile.stream.Sync()
 	return
 }
-func (flvFile *File) Size() (size int64) {
-	size = flvFile.size
-	return
+func (flvFile *File) Size() (int64) {
+	return flvfile.size
 }
 
-func (flvFile *File) ReadTag() (header *TagHeader, data []byte, err error) {
+func (flvFile *FileReader) ReadTag() (header *TagHeader, data []byte, err error) {
 	tmpBuf := make([]byte, 4)
 	header = &TagHeader{}
 	// Read tag header
-	if _, err = io.ReadFull(flvFile.file, tmpBuf[3:]); err != nil {
+	if _, err = io.ReadFull(flvFile.stream, tmpBuf[3:]); err != nil {
 		return
 	}
 	header.TagType = tmpBuf[3]
 
 	// Read tag size
-	if _, err = io.ReadFull(flvFile.file, tmpBuf[1:]); err != nil {
+	if _, err = io.ReadFull(flvFile.stream, tmpBuf[1:]); err != nil {
 		return
 	}
 	header.DataSize = uint32(tmpBuf[1])<<16 | uint32(tmpBuf[2])<<8 | uint32(tmpBuf[3])
 
 	// Read timestamp
-	if _, err = io.ReadFull(flvFile.file, tmpBuf); err != nil {
+	if _, err = io.ReadFull(flvFile.stream, tmpBuf); err != nil {
 		return
 	}
 	header.Timestamp = uint32(tmpBuf[3])<<32 + uint32(tmpBuf[0])<<16 + uint32(tmpBuf[1])<<8 + uint32(tmpBuf[2])
 
 	// Read stream ID
-	if _, err = io.ReadFull(flvFile.file, tmpBuf[1:]); err != nil {
+	if _, err = io.ReadFull(flvFile.stream, tmpBuf[1:]); err != nil {
 		return
 	}
 
 	// Read data
 	data = make([]byte, header.DataSize)
-	if _, err = io.ReadFull(flvFile.file, data); err != nil {
+	if _, err = io.ReadFull(flvFile.stream, data); err != nil {
 		return
 	}
 
 	// Read previous tag size
-	if _, err = io.ReadFull(flvFile.file, tmpBuf); err != nil {
+	if _, err = io.ReadFull(flvFile.stream, tmpBuf); err != nil {
 		return
 	}
 
@@ -245,11 +250,11 @@ func (flvFile *File) ReadTag() (header *TagHeader, data []byte, err error) {
 }
 
 func (flvFile *File) IsFinished() bool {
-	pos, err := flvFile.file.Seek(0, 1)
+	pos, err := flvFile.stream.Seek(0, 1)
 	return (err != nil) || (pos >= flvFile.size)
 }
 func (flvFile *File) LoopBack() {
-	flvFile.file.Seek(HEADER_LEN, 0)
+	flvFile.stream.Seek(HEADER_LEN, 0)
 }
 func (flvFile *File) FilePath() string {
 	return flvFile.name
